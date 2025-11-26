@@ -43,6 +43,8 @@ def parse_gemini_json(text):
         return []
 
 # 4. MAIN LOGIC
+# --- UPDATED HEADER SECTION ---
+st.markdown("### 🏥 Radiology Seminar Presentation") # Smaller, less bold header
 st.title("🩻 Interactive X-Ray Analyzer")
 st.markdown("Upload a CXR. **Hover over specific regions** (e.g., heart, lung bases) to reveal AI findings.")
 
@@ -105,12 +107,11 @@ if uploaded_file and api_key:
                     abs_y2 = (y_max / 1000) * height
                     abs_x2 = (x_max / 1000) * width
                     
-                    # Create a closed path for the box (TopLeft -> TopRight -> BottomRight -> BottomLeft -> TopLeft)
+                    # Create a closed path for the box
                     x_path = [abs_x1, abs_x2, abs_x2, abs_x1, abs_x1]
                     y_path = [abs_y1, abs_y1, abs_y2, abs_y2, abs_y1]
 
                     # Add an "Invisible" Filled Polygon
-                    # We use a very nearly transparent fill so it captures hover events
                     fig.add_trace(go.Scatter(
                         x=x_path,
                         y=y_path,
@@ -143,16 +144,17 @@ if uploaded_file and api_key:
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # --- SIDEBAR TEXT REPORT ---
+            # --- SIDEBAR TEXT REPORT (FOLDABLE) ---
             with col2:
-                st.subheader("📋 Findings Log")
-                if detections:
-                    for d in detections:
-                        st.write(f"**{d['label']}**")
-                        st.caption(d['description'])
-                else:
-                    st.write("No specific pathology detected.")
-                    # st.write("Raw Output:", response.text) # Uncomment for debugging
+                # UPDATED: Wrapped inside an expander to create the fold/hide toggle
+                with st.expander("📋 Findings Log", expanded=True): 
+                    if detections:
+                        for d in detections:
+                            st.write(f"**{d['label']}**")
+                            st.caption(d['description'])
+                    else:
+                        st.write("No specific pathology detected.")
+                        # st.write("Raw Output:", response.text) # Uncomment for debugging
 
         except Exception as e:
             st.error(f"Error: {e}")
