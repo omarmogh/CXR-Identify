@@ -4,12 +4,12 @@ from PIL import Image
 import plotly.graph_objects as go
 import json
 import re
+import textwrap
 
 # 1. CONFIGURATION
 st.set_page_config(page_title="Interactive AI Radiology", layout="wide", page_icon="🩻")
 
 # --- CALLBACK FUNCTION FOR PASSKEY ---
-# This function runs BEFORE the page reloads, fixing the "widget instantiated" error
 def check_passkey():
     if st.session_state.get("passkey_input") == "0000":
         st.session_state["google_api_key"] = "AIzaSyCDaBJ0bSub3S5VZoXBOViqyq3bFaHcIyg"
@@ -18,7 +18,7 @@ def check_passkey():
 st.sidebar.title("🩻 Interactive Mode")
 st.sidebar.info("Hover over the image to see AI detections.")
 
-# --- API KEY INPUT WITH SESSION STATE ---
+# --- API KEY INPUT ---
 api_key = st.sidebar.text_input("Enter Google API Key", type="password", key="google_api_key")
 
 # --- DYNAMIC MODEL LOADER ---
@@ -38,28 +38,22 @@ if not available_models:
 
 model_type = st.sidebar.selectbox("Select Model (Pro recommended for coords)", available_models)
 
-# --- SECRET PASSKEY (UNDER EVERYTHING) ---
+# --- SECRET PASSKEY ---
 st.sidebar.markdown("---")
-# We use on_change=check_passkey to trigger the update safely
 st.sidebar.text_input("Enter Passkey", type="password", key="passkey_input", on_change=check_passkey)
 
 # 3. HELPER FUNCTION TO PARSE JSON
 def parse_gemini_json(text):
-    """
-    Cleans and parses the JSON response from Gemini.
-    """
     try:
-        # Remove code blocks if present
         text = text.replace("```json", "").replace("```", "")
         return json.loads(text)
     except json.JSONDecodeError:
         return []
 
 # 4. MAIN LOGIC
-# --- UPDATED HEADER SECTION ---
 st.markdown("### 🏥 Radiology Seminar Presentation") 
 st.title("🩻 General AI X-Ray Pathology Analyzer")
-st.markdown("Upload a CXR. The AI will scan for **any** common thoracic pathology (Pneumothorax, Pneumonia, HF, Masses, etc).")
+st.markdown("Upload a CXR. The AI references the **Fleischner Society Lexicon** to detect pathologies.")
 
 uploaded_file = st.file_uploader("Choose an X-ray...", type=["jpg", "png", "jpeg"])
 
@@ -71,19 +65,34 @@ if uploaded_file and api_key:
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.info("🤖 AI is analyzing for comprehensive pathology... (10-15s)")
+        st.info("🤖 AI is analyzing for comprehensive pathology...")
         
         try:
             model = genai.GenerativeModel(model_name=model_type)
             
-            # --- PROMPT FOR GENERAL PATHOLOGY ---
-            prompt = """
-            You are an expert Radiologist. Analyze this chest X-ray for ANY pathological findings.
-            Look for a wide range of conditions including but not limited to:
-            - **Lungs**: Pneumothorax, Pneumonia, Consolidation, Nodule/Mass, Atelectasis, COPD/Emphysema.
-            - **Pleura**: Pleural Effusion, Thickening.
-            - **Cardiovascular**: Cardiomegaly, Heart Failure signs (Kerley B lines, Cephalization), Widened Mediastinum.
-            - **Bones/Soft Tissue**: Fractures, Foreign Bodies, Subcutaneous Emphysema.
+            # --- KNOWLEDGE BASE: RADIOLOGICAL LEXICON ---
+            # This injects the "Medical Library" directly into the AI's context
+            PATHOLOGY_LIBRARY = """
+            1. AIRSPACE OPACITIES: Consolidation, Air bronchogram, Ground-glass opacity, Atelectasis (Lobar, Plate-like), Nodule (<3cm), Mass (>3cm), Cavitation, Miliary pattern.
+            2. INTERSTITIAL SIGNS: Reticular pattern, Reticulonodular pattern, Kerley A/B/C lines, Honeycombing, Peribronchial cuffing, Septal thickening.
+            3. PLEURAL ABNORMALITIES: Pleural effusion (Meniscus sign), Pneumothorax (Visceral pleural line, Deep sulcus sign), Hydropneumothorax, Pleural thickening/plaques, Empyema.
+            4. MEDIASTINUM & HILA: Hilar adenopathy, Widened mediastinum, Tracheal deviation, Pneumomediastinum, Hiatal hernia.
+            5. CARDIAC: Cardiomegaly (CTR > 0.5), Pericardial effusion (Water bottle sign), Dextrocardia, Enlarged LA/RA/LV/RV.
+            6. BONES & SOFT TISSUE: Fractures (Rib, Clavicle, Spine), Lytic/Sclerotic lesions, Subcutaneous emphysema, Foreign bodies (Lines, Tubes, Pacemakers).
+            7. DIAPHRAGM: Elevation (Phrenic nerve palsy), Flattening (COPD), Free air (Pneumoperitoneum/Chilaiditi).
+            """
+
+            # --- PROMPT ---
+            prompt = f"""
+            You are an expert Radiologist. Perform a SYSTEMATIC REVIEW of this chest X-ray.
+            
+            Reference this Medical Lexicon to ensure you check for ALL possibilities:
+            {PATHOLOGY_LIBRARY}
+            
+            **INSTRUCTIONS:**
+            - Check for ALL possibilities, including subtle or early signs.
+            - List both definitive and suspected findings to ensure a comprehensive review.
+            - Be extremely thorough.
             
             Return your findings in strictly valid JSON format. 
             Do NOT write any conversational text. Only return the JSON list.
@@ -92,9 +101,8 @@ if uploaded_file and api_key:
             
             Example Format:
             [
-                {"label": "Right Pneumothorax", "box_2d": [50, 600, 400, 900], "description": "Visible visceral pleural edge with absence of peripheral lung markings"},
-                {"label": "Cardiomegaly", "box_2d": [500, 300, 900, 700], "description": "Enlarged cardiac silhouette (CTR > 0.5)"},
-                {"label": "Left Lower Lobe Pneumonia", "box_2d": [600, 600, 850, 900], "description": "Airspace consolidation with air bronchograms"}
+                {{"label": "Right Pneumothorax", "box_2d": [50, 600, 400, 900], "description": "Visible visceral pleural edge with absence of peripheral lung markings"}},
+                {{"label": "Cardiomegaly", "box_2d": [500, 300, 900, 700], "description": "Enlarged cardiac silhouette (CTR > 0.5)"}}
             ]
             
             If the image is completely normal, return an empty list [].
@@ -103,66 +111,48 @@ if uploaded_file and api_key:
             response = model.generate_content([prompt, img])
             detections = parse_gemini_json(response.text)
             
-            # --- BUILD PLOTLY INTERACTIVE IMAGE ---
+            # --- PLOTLY CHART ---
             fig = go.Figure()
-            
-            # Add the X-Ray Image
-            # hoverinfo='skip' ensures the annoying "Trace 0" or "x=100" text doesn't show up
             fig.add_trace(go.Image(z=img, hoverinfo='skip'))
             
-            # Add Invisible Hover Zones
             if detections:
                 for d in detections:
                     label = d.get("label", "Unknown")
-                    box = d.get("box_2d", [0,0,0,0]) # [ymin, xmin, ymax, xmax] 0-1000
+                    box = d.get("box_2d", [0,0,0,0]) 
                     desc = d.get("description", "")
                     
-                    # Convert normalized (0-1000) coords to pixels
-                    y_min, x_min, y_max, x_max = box
+                    # Wrap text to max 50 characters width per line
+                    wrapped_desc = "<br>".join(textwrap.wrap(desc, width=50))
                     
+                    y_min, x_min, y_max, x_max = box
                     abs_y1 = (y_min / 1000) * height
                     abs_x1 = (x_min / 1000) * width
                     abs_y2 = (y_max / 1000) * height
                     abs_x2 = (x_max / 1000) * width
                     
-                    # Create a closed path for the box
                     x_path = [abs_x1, abs_x2, abs_x2, abs_x1, abs_x1]
                     y_path = [abs_y1, abs_y1, abs_y2, abs_y2, abs_y1]
 
-                    # Add an "Invisible" Filled Polygon
                     fig.add_trace(go.Scatter(
-                        x=x_path,
-                        y=y_path,
-                        fill="toself",
-                        mode="lines",
-                        line=dict(color="rgba(0,0,0,0)"),       # Invisible border
-                        fillcolor="rgba(255, 255, 255, 0.01)",  # 1% opacity fill (needed to catch mouse hover)
-                        name=label,
-                        text=label,
-                        customdata=[desc],
-                        hovertemplate="<b>%{text}</b><br><br>%{customdata}<extra></extra>", # This creates the pop-up text
+                        x=x_path, y=y_path,
+                        fill="toself", mode="lines",
+                        line=dict(color="rgba(0,0,0,0)"),
+                        fillcolor="rgba(255, 255, 255, 0.01)",
+                        name=label, text=label, customdata=[wrapped_desc],
+                        hovertemplate="<b>%{text}</b><br><br>%{customdata}<extra></extra>",
                         showlegend=False
                     ))
             
-            # Update Layout
             fig.update_layout(
-                width=800, 
-                height=800 * (height/width),
+                width=800, height=800 * (height/width),
                 margin=dict(l=0, r=0, t=0, b=0),
                 xaxis={'visible': False, 'range': [0, width]},
-                yaxis={'visible': False, 'range': [height, 0], 'scaleanchor': 'x'}, # Invert Y for images
-                
-                # Make the hover tooltip BIGGER and cleaner
-                hoverlabel=dict(
-                    bgcolor="white", 
-                    font=dict(color="black", size=18, family="Arial"), # Explicitly set text to black
-                    bordercolor="black"
-                )
+                yaxis={'visible': False, 'range': [height, 0], 'scaleanchor': 'x'},
+                hoverlabel=dict(bgcolor="white", font=dict(color="black", size=18, family="Arial"), bordercolor="black")
             )
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # --- SIDEBAR TEXT REPORT (FOLDABLE) ---
             with col2:
                 with st.expander("📋 Findings Log", expanded=True): 
                     if detections:
@@ -171,7 +161,6 @@ if uploaded_file and api_key:
                             st.caption(d['description'])
                     else:
                         st.write("No specific pathology detected.")
-                        # st.write("Raw Output:", response.text) # Uncomment for debugging
 
         except Exception as e:
             st.error(f"Error: {e}")
