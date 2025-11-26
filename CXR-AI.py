@@ -6,12 +6,20 @@ import json
 import re
 
 # 1. CONFIGURATION
-st.set_page_config(page_title="Interactive HF Radiology", layout="wide", page_icon="🩻")
+st.set_page_config(page_title="Interactive AI Radiology", layout="wide", page_icon="🩻")
+
+# --- CALLBACK FUNCTION FOR PASSKEY ---
+# This function runs BEFORE the page reloads, fixing the "widget instantiated" error
+def check_passkey():
+    if st.session_state.get("passkey_input") == "0000":
+        st.session_state["google_api_key"] = "AIzaSyCDaBJ0bSub3S5VZoXBOViqyq3bFaHcIyg"
 
 # 2. SIDEBAR
 st.sidebar.title("🩻 Interactive Mode")
 st.sidebar.info("Hover over the image to see AI detections.")
-api_key = st.sidebar.text_input("Enter Google API Key", type="password")
+
+# --- API KEY INPUT WITH SESSION STATE ---
+api_key = st.sidebar.text_input("Enter Google API Key", type="password", key="google_api_key")
 
 # --- DYNAMIC MODEL LOADER ---
 available_models = []
@@ -30,6 +38,11 @@ if not available_models:
 
 model_type = st.sidebar.selectbox("Select Model (Pro recommended for coords)", available_models)
 
+# --- SECRET PASSKEY (UNDER EVERYTHING) ---
+st.sidebar.markdown("---")
+# We use on_change=check_passkey to trigger the update safely
+st.sidebar.text_input("Enter Passkey", type="password", key="passkey_input", on_change=check_passkey)
+
 # 3. HELPER FUNCTION TO PARSE JSON
 def parse_gemini_json(text):
     """
@@ -44,9 +57,9 @@ def parse_gemini_json(text):
 
 # 4. MAIN LOGIC
 # --- UPDATED HEADER SECTION ---
-st.markdown("### 🏥 Radiology Seminar Presentation") # Smaller, less bold header
-st.title("🩻 Interactive X-Ray Analyzer")
-st.markdown("Upload a CXR. **Hover over specific regions** (e.g., heart, lung bases) to reveal AI findings.")
+st.markdown("### 🏥 Radiology Seminar Presentation") 
+st.title("🩻 General AI X-Ray Pathology Analyzer")
+st.markdown("Upload a CXR. The AI will scan for **any** common thoracic pathology (Pneumothorax, Pneumonia, HF, Masses, etc).")
 
 uploaded_file = st.file_uploader("Choose an X-ray...", type=["jpg", "png", "jpeg"])
 
@@ -58,28 +71,33 @@ if uploaded_file and api_key:
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.info("🤖 AI is analyzing coordinates... (This may take 10-15s)")
+        st.info("🤖 AI is analyzing for comprehensive pathology... (10-15s)")
         
         try:
             model = genai.GenerativeModel(model_name=model_type)
             
-            # --- PROMPT FOR COORDINATES ---
+            # --- PROMPT FOR GENERAL PATHOLOGY ---
             prompt = """
-            You are an expert Radiologist. Analyze this chest X-ray for signs of Heart Failure.
+            You are an expert Radiologist. Analyze this chest X-ray for ANY pathological findings.
+            Look for a wide range of conditions including but not limited to:
+            - **Lungs**: Pneumothorax, Pneumonia, Consolidation, Nodule/Mass, Atelectasis, COPD/Emphysema.
+            - **Pleura**: Pleural Effusion, Thickening.
+            - **Cardiovascular**: Cardiomegaly, Heart Failure signs (Kerley B lines, Cephalization), Widened Mediastinum.
+            - **Bones/Soft Tissue**: Fractures, Foreign Bodies, Subcutaneous Emphysema.
             
             Return your findings in strictly valid JSON format. 
             Do NOT write any conversational text. Only return the JSON list.
             
-            For each finding (Cardiomegaly, Pleural Effusion, Kerley B Lines, Cephalization, Batwing Edema), 
-            provide a bounding box in the format [ymin, xmin, ymax, xmax] on a scale of 0 to 1000.
+            For each finding, provide a bounding box in the format [ymin, xmin, ymax, xmax] on a scale of 0 to 1000.
             
             Example Format:
             [
-                {"label": "Cardiomegaly", "box_2d": [500, 300, 900, 700], "description": "Enlarged cardiac silhouette"},
-                {"label": "Right Pleural Effusion", "box_2d": [800, 100, 950, 400], "description": "Blunting of costophrenic angle"}
+                {"label": "Right Pneumothorax", "box_2d": [50, 600, 400, 900], "description": "Visible visceral pleural edge with absence of peripheral lung markings"},
+                {"label": "Cardiomegaly", "box_2d": [500, 300, 900, 700], "description": "Enlarged cardiac silhouette (CTR > 0.5)"},
+                {"label": "Left Lower Lobe Pneumonia", "box_2d": [600, 600, 850, 900], "description": "Airspace consolidation with air bronchograms"}
             ]
             
-            If normal, return an empty list [].
+            If the image is completely normal, return an empty list [].
             """
             
             response = model.generate_content([prompt, img])
@@ -146,7 +164,6 @@ if uploaded_file and api_key:
             
             # --- SIDEBAR TEXT REPORT (FOLDABLE) ---
             with col2:
-                # UPDATED: Wrapped inside an expander to create the fold/hide toggle
                 with st.expander("📋 Findings Log", expanded=True): 
                     if detections:
                         for d in detections:
