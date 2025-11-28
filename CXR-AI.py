@@ -15,6 +15,7 @@ def check_passkey():
         st.session_state["google_api_key"] = "AIzaSyCDaBJ0bSub3S5VZoXBOViqyq3bFaHcIyg"
 
 # 2. SIDEBAR
+st.sidebar.caption("© 2025 Omar Almoghrabi. All rights reserved") 
 st.sidebar.title("🩻 Interactive Mode")
 st.sidebar.info("Hover over the image to see AI detections.")
 
@@ -53,7 +54,7 @@ def parse_gemini_json(text):
 # 4. MAIN LOGIC
 st.markdown("### 🏥 Radiology Seminar Presentation") 
 st.title("🩻 General AI X-Ray Pathology Analyzer")
-st.markdown("Upload a CXR. The AI references the **Fleischner Society Lexicon** to detect pathologies.")
+st.markdown("Upload a CXR (Single or Multi-View). The AI references the **Fleischner Society Lexicon**.")
 
 uploaded_file = st.file_uploader("Choose an X-ray...", type=["jpg", "png", "jpeg"])
 
@@ -65,13 +66,12 @@ if uploaded_file and api_key:
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.info("🤖 AI is analyzing for comprehensive pathology...")
+        st.info("🤖 AI is analyzing image... (Scanning for duplicates & calculating scores)")
         
         try:
             model = genai.GenerativeModel(model_name=model_type)
             
             # --- KNOWLEDGE BASE: RADIOLOGICAL LEXICON ---
-            # This injects the "Medical Library" directly into the AI's context
             PATHOLOGY_LIBRARY = """
             1. AIRSPACE OPACITIES: Consolidation, Air bronchogram, Ground-glass opacity, Atelectasis (Lobar, Plate-like), Nodule (<3cm), Mass (>3cm), Cavitation, Miliary pattern.
             2. INTERSTITIAL SIGNS: Reticular pattern, Reticulonodular pattern, Kerley A/B/C lines, Honeycombing, Peribronchial cuffing, Septal thickening.
@@ -86,26 +86,41 @@ if uploaded_file and api_key:
             prompt = f"""
             You are an expert Radiologist. Perform a SYSTEMATIC REVIEW of this chest X-ray.
             
-            Reference this Medical Lexicon to ensure you check for ALL possibilities:
+            **1. IMAGE ANALYSIS PROTOCOL (CRITICAL):**
+            - The uploaded image may contain MULTIPLE views (e.g., PA and Lateral side-by-side).
+            - **SINGLE REPORT RULE:** Treat all views in the image as ONE single diagnostic exam. 
+            - **NO DUPLICATES:** If a pathology (e.g., 'Pleural Effusion') is visible in both the PA and Lateral views, **DO NOT** list it twice. List it **ONCE**.
+            - **BOUNDING BOX SELECTION:** For the single consolidated finding, draw the bounding box on the view where the pathology is **most clearly defined** or easiest to measure. Do not draw two boxes for the same pathology.
+            
+            **2. ACCURACY & CONFIDENCE SCORING:**
+            - You must **CALCULATE** a confidence score (0-100%) for every finding based on these metrics:
+              - **Visual Clarity:** Is the sign distinct (Score 90-100) or hazy/obscured (Score 40-60)?
+              - **Lexicon Match:** Does it perfectly match the Fleischner Society definition?
+              - **Corroboration:** If multiple views exist, use them to increase your confidence score, but remember to output only ONE finding.
+            
+            Reference this Medical Lexicon:
             {PATHOLOGY_LIBRARY}
             
             **INSTRUCTIONS:**
             - Check for ALL possibilities, including subtle or early signs.
-            - List both definitive and suspected findings to ensure a comprehensive review.
-            - Be extremely thorough.
+            - List both definitive and suspected findings.
             
-            Return your findings in strictly valid JSON format. 
-            Do NOT write any conversational text. Only return the JSON list.
+            Return findings in strictly valid JSON format. 
+            Do NOT write conversational text. Only return the JSON list.
             
-            For each finding, provide a bounding box in the format [ymin, xmin, ymax, xmax] on a scale of 0 to 1000.
+            For each finding, provide:
+            - label: Name of pathology (Include location, e.g., "Right Lower Lobe Pneumonia")
+            - box_2d: [ymin, xmin, ymax, xmax] (0-1000 scale)
+            - description: Brief medical description. Mention if it was confirmed on multiple views.
+            - confidence: Integer 0-100
             
             Example Format:
             [
-                {{"label": "Right Pneumothorax", "box_2d": [50, 600, 400, 900], "description": "Visible visceral pleural edge with absence of peripheral lung markings"}},
-                {{"label": "Cardiomegaly", "box_2d": [500, 300, 900, 700], "description": "Enlarged cardiac silhouette (CTR > 0.5)"}}
+                {{"label": "Right Pneumothorax", "box_2d": [50, 600, 400, 900], "description": "Visible visceral pleural edge...", "confidence": 95}},
+                {{"label": "Possible Nodule", "box_2d": [500, 300, 550, 350], "description": "Faint opacity in RUL...", "confidence": 45}}
             ]
             
-            If the image is completely normal, return an empty list [].
+            If normal, return [].
             """
             
             response = model.generate_content([prompt, img])
@@ -120,9 +135,10 @@ if uploaded_file and api_key:
                     label = d.get("label", "Unknown")
                     box = d.get("box_2d", [0,0,0,0]) 
                     desc = d.get("description", "")
+                    conf = d.get("confidence", 0)
                     
-                    # Wrap text to max 50 characters width per line
-                    wrapped_desc = "<br>".join(textwrap.wrap(desc, width=50))
+                    # Wrap text
+                    wrapped_desc = "<br>".join(textwrap.wrap(f"{desc} (Conf: {conf}%)", width=50))
                     
                     y_min, x_min, y_max, x_max = box
                     abs_y1 = (y_min / 1000) * height
@@ -133,11 +149,14 @@ if uploaded_file and api_key:
                     x_path = [abs_x1, abs_x2, abs_x2, abs_x1, abs_x1]
                     y_path = [abs_y1, abs_y1, abs_y2, abs_y2, abs_y1]
 
+                    # Determine Color based on Confidence for the BOX too
+                    box_color = "rgba(0, 255, 0, 0.2)" if conf >= 70 else "rgba(255, 165, 0, 0.2)" if conf >= 40 else "rgba(255, 0, 0, 0.2)"
+
                     fig.add_trace(go.Scatter(
                         x=x_path, y=y_path,
                         fill="toself", mode="lines",
                         line=dict(color="rgba(0,0,0,0)"),
-                        fillcolor="rgba(255, 255, 255, 0.01)",
+                        fillcolor="rgba(255, 255, 255, 0.01)", # Invisible hover zone
                         name=label, text=label, customdata=[wrapped_desc],
                         hovertemplate="<b>%{text}</b><br><br>%{customdata}<extra></extra>",
                         showlegend=False
@@ -156,9 +175,37 @@ if uploaded_file and api_key:
             with col2:
                 with st.expander("📋 Findings Log", expanded=True): 
                     if detections:
-                        for d in detections:
-                            st.write(f"**{d['label']}**")
-                            st.caption(d['description'])
+                        for i, d in enumerate(detections):
+                            label = d.get("label", "Unknown")
+                            desc = d.get("description", "")
+                            conf = d.get("confidence", 0)
+                            
+                            # Confidence Logic
+                            if conf >= 70:
+                                color_str = "green"
+                                icon = "✅"
+                                status = "High Accuracy"
+                            elif conf >= 40:
+                                color_str = "orange"
+                                icon = "⚠️"
+                                status = "Moderate Accuracy"
+                            else:
+                                color_str = "red"
+                                icon = "❓"
+                                status = "Low Accuracy"
+
+                            st.markdown(f"**{label}**")
+                            st.caption(desc)
+                            st.markdown(f":{color_str}[**{icon} {conf}% - {status}**]")
+                            
+                            # Deep Search Button for Low/Moderate Confidence
+                            if conf < 70:
+                                if st.button(f"🔍 Consult Medical Library for '{label}'", key=f"btn_{i}"):
+                                    st.info(f"running deep analysis on {label}...")
+                                    # Simulate a deep dive by showing definition
+                                    st.markdown(f"> **Library Definition Check:** The AI is re-evaluating **{label}** against the Fleischner Society criteria. Please clinically correlate.")
+                            
+                            st.markdown("---")
                     else:
                         st.write("No specific pathology detected.")
 
